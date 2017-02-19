@@ -1,0 +1,220 @@
+---
+title: "Analyzing data with Osmosis and R"
+author: "Bjenk Ellefsen, PhD"
+output: 
+  html_document:
+    keep_md: true
+---
+
+##Introduction
+The goal is to obtain estimates from OSM to track: number of buildings within a city's or suburb administrative boundary, or other custom made boundary, average number of attributes per building and number of users associated with those buildings. Tools needed: [R](https://cran.r-project.org/), [RStudio](https://www.rstudio.com/products/rstudio/download/), [QGIS](http://www.qgis.org/en/site/) and [Osmosis](https://wiki.openstreetmap.org/wiki/Osmosis).
+
+These tools are all open source and free. First, install R, then RStudio. For QGIS, there are some plugins that are recommended like osmpoly_export, QuickOSM, QuickMapServices, OSMInfo but I will focus on R and Osmosis. QGIS is needed if you wish to do more processing with boundaries and maps. Once you have converted an osm file to GeoJSON, as explained later, you can just import it into QGIS to visualize, make a map, etc. However, you can also directly import an osm file into QGIS just as well.
+
+For Osmosis, follow the installation [instructions](http://wiki.openstreetmap.org/wiki/Osmosis/Installation)
+
+You will also need the command line tool [osmtogeojson](https://github.com/tyrasd/osmtogeojson)
+To install it, you will need node.js, easy to [install](https://nodejs.org)
+
+Once Node is installed, install osmtogeojson in a command shell or terminal:
+```{r, eval=FALSE}
+npm install -g osmtogeojson
+```
+
+Now that the initial setup is done, follow the next steps.
+
+###Getting OSM data
+
+The first step is to obtain an extract of the area which contains the cities we are tracking. For Lusaka, we download an extract from [Geofrabrik](download.geofabrik.de), in this case the [Zambia file](download.geofabrik.de/africa/zambia/zambia.html). The file is called zambia-latest.osm.pbf if the most recent extract is desired but there are archived extracts up to a point. 
+
+We download the files with R which allows to keep a full documentation of the process:
+```{r, eval=FALSE}
+#create a directory for the month. The date can be the day the file is downloaded.
+if(!file.exists("./170201")) dir.create("./170201")
+
+zambia <- "http://download.geofabrik.de/africa/zambia-latest.osm.pbf"
+download.file(zambia, destfile = "./170201/zambia-latest.osm.pbf")
+
+#It is best to always rename the file with the date to keep track of when teh file was downloaded. This way, it is also possbile to build a timeline.
+```
+
+##Manipulating OSM data with Osmosis
+We are going to use [Osmosis](wiki.openstreetmap.org/wiki/Osmosis) to do the first steps to prepare the data.
+
+###Using boundaries to subset OSM data (cities)
+We must first subset to the cities or suburbs with geometries, the administrative boundaries. To produce accurate and consistent estimate, it is a good approach to define a boundary based on a standard geography or one that has been predefined. Which one is used is less important than being clear as to which one will be used. In this example with Lukasa, we have created a custom boundary for Mutendere using QGIS.
+
+####Creating the boundary file
+Osmosis is using a specific type of file for a boundary called a polygon file.  The Osmosis polygon file format is a .poly file. To make one, when using administrative boundaries, we go to openstreetmap.org and search for a city. After selecting it, the first line in the sidebar give a relation number.
+
+Then we go to [polygons.openstreetmap.fr](polygons.openstreetmap.fr) and paste the number in iD relation and submit. The results will show a list of available files, we select .poly. Save the page as <cityName>.poly.
+
+Another way of creating a boundary .poly file is to use a Shapefile or a GeoJson file in QGIS and the plugin OSMPoly_export. This is useful when using a custom boundary that we may have created in QGIS instead of any administrative boundaries already in OSM or any other custom geometry.
+
+In the case of Lusaka, I manually created a polygon to define Mutendere, saved the polygon as a geojson file and I also exported it as a poly file.
+
+###Subsetting to city or suburb boundary
+
+We are going to create one subset from the zambia file: mutendere. 
+
+Subset for the cities:
+
+```{r, eval=FALSE}
+osmosis --rbf zambia-latest.osm.pbf --bounding-polygon file="Mutendere.poly" completeWays=yes --wx mutendere.osm
+```
+
+###Subsetting buildings
+
+Then we use these commands to subset buildings:
+```{r, eval=FALSE}
+#Buildings
+
+#1 Mutendere
+
+osmosis \
+--rx mutendere.osm \
+--tf accept-ways 'building=*' \
+--tf reject-relations \
+--used-node \
+--wx MutBuildW.osm
+
+#Convert to geojson:
+osmtogeojson MutBuildW.osm > MutBuildW.geojson
+
+#if memory error. Files above 100MB may need more memory. In the case of zambia, this is not a problem.
+node --max_old_space_size=8192 `which osmtogeojson` mutendereW.osm > OttBuildW.geojson
+```
+
+These commands do not have to be run outside of R as a separate step.
+```{r, eval=FALSE}
+
+#As an example:
+#Here, " needs to be escaped to work (with a \)    
+system("cd 170201 && osmosis \\
+--rbf zambia-170201.osm.pbf \\
+--bounding-polygon file=\"Mutendere.poly\" \\
+completeWays=yes \\
+--wx mutendere.osm")
+
+#Same thing, a \ needs to be escaped with another \
+system("cd 170201 && osmosis \\
+--rx mutendere.osm \\
+--tf accept-ways 'building=*' \\
+--tf reject-relations \\
+--used-node \\
+--wx MutBuildW.osm")
+
+#The first command, "cd <dir_name>" changes to the directory where the OSM data was saved "&&" means "and".The reason for \\ instead of just one \ is that it must be "escaped" in R. \ is a speacial character in the R environment. so \\ tells R that \ is not the special character it knows but a literal \.
+#This was done on a mac. On a PC, system() can be replaced by shell().The advantage of including these commands within the dashboard process is greater automation.
+```
+
+
+##Manipulating OSM data in R
+
+OSM data is formatted in [Extensible Markup Language (XML)](https://en.wikipedia.org/wiki/XML), a language that defines the encoding of a document that can be read by humans and machines. Because of this, XML is described as textual data format with Unicode support for many human languages.
+
+There are two ways this can be done. Doing analysis on in the XML format or using the GeoJSON format. XML is the default format for OSM and GeoJSON is obtained after converting an .osm file into GeoJSON as above. 
+
+###Analyzing OSM data from XML
+First load the libraries.
+```{r, eval=FALSE}
+#Libraries must be installed first with the command install.packages()
+#Example: install.packages("XML"). If using RStudio (Recommended), in the right pane under the packages tab, select install, type the package in the search box and click install.
+
+#Load libraries
+library(XML)
+library(tidyverse)
+library(lubridate)
+
+# Read OSM data as XML
+MutBuildFeb <- xmlParse("170201/MutBuildW.osm")
+
+#Return the number of buildings (ways only as per above explanation)
+numBuildMutFeb <- length(MutBuildFeb["//way"])
+
+# Compute the number of unique User IDs associated with the ways
+#uid: user id of the users who last modified the object 
+UsersBuildMutFeb <- 
+  length(unique(xmlSApply(X = MutBuildFeb["//way"], 
+                          FUN = function(x){as.numeric(xmlAttrs(x)["uid"])})))
+
+# Compute the number of tags on the each building
+TagBuildMutFeb <- length(MutBuildFeb["//way/tag"])
+
+# Find the average number of tags per building
+avgTagBuildMutFeb <- TagBuildMutFeb / numBuildMutFeb
+
+#Create a data frame for reporting
+
+#First create variables and columns.
+suburbs <- c("Mutendere")
+month <- c("2017-02-01")
+buildings <- c(numBuildMutFeb)
+usersBuild <- c(UsersBuildMutFeb)
+tagsBuild <- c(TagBuildMutFeb)
+averTagsBuild <- c(avgTagBuildMutFeb)
+
+#Assemble as data frame
+BuildFeb <- data.frame(suburbs, month, buildings, usersBuild, tagsBuild, averTagsBuild)
+
+#convert dates
+BuildFeb$month <- ymd(BuildFeb$month)
+
+#Sort by month
+BuildFeb <- arrange(BuildFeb, month)
+
+#Write to a csv file
+write.csv(Build, 'MutBuildings.csv', row.names = F)
+
+#If a new extract si to be added to this table, redo the above for a new month and follow this at the end:
+
+#Import the table
+Build <- read.csv('MutBuildings.csv', header = TRUE)
+#convert dates
+Build$month <- ymd(Build$month)
+
+#join with new added data
+Build <- full_join(Build, BuildFeb)
+Build <- arrange(Build, month)
+
+#Save again to a csv file
+write.csv(Build, 'MutBuildings.csv', row.names = F)
+
+```
+
+##Analyzing OSM data with the GeoJSON format
+This is probably easier than XML. The logic is to import the GeoJSON file and then extracting the data frame from it.
+
+```{r, eval=FALSE}
+library(tidyverse)
+library(lubridate)
+library(rgdal)
+library(forcats)
+library(scales)
+
+#rgdal will read GeoJSON:
+BuildMut <- readOGR("/Users/bjenkellefsen/Projects/Lusaka/MutBuildW.geojson", 
+                    "OGRGeoJSON", require_geomType="wkbPolygon")
+
+#This creates a geospatial object. The data frame is contained in its structure and to access it we use @data.
+
+#Extract data from geopspatial object
+data <- BuildMut@data
+
+#Now we have a dtata frame that we can manipulate however we wish.
+#remove extra row names column
+rownames(MutData) <- c()
+
+#convert timestamp to date object
+MutData$timestamp <- as.Date(MutData$timestamp)
+
+#Example: count the number of buildings and add a cumulative sum column
+MutBuild <- data %>% 
+  group_by(timestamp) %>%
+  summarise(numB = length(building)) %>% 
+  mutate(cumsum = cumsum(numB))
+
+#Any objects at this point like MutBuild or data can be saved as a table in a csv format.
+#dplyr is the syntax of choice to manipulate data in R, as above in the example.
+
+```
